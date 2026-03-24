@@ -21,7 +21,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 def get_supabase_headers(return_representation=False):
     headers={
         "apikey":SUPABASE_KEY,
-        "Authorization":f"Bearer{SUPABASE_KEY}",
+        "Authorization":f"Bearer {SUPABASE_KEY}",
         "Content-Type":"application/json"
     }
     if return_representation:
@@ -54,7 +54,7 @@ def create_tag(tag:TagCreate):
     
     return response.json()[0]
 
-app.get("/discover/")
+@app.get("/discover/")
 def discover_books():
     # tags_data = supabase.table("tags").select("*").execute()
     url = f"{SUPABASE_URL}/rest/v1/tags?select=*"
@@ -108,7 +108,7 @@ def save_book(book:BookSave):
 def update_book_status(book_id:int,book_update:BookUpdate):
     # data = supabase.table("saved_books").update({"status":book_update.status}).eq("id",book_id).execute()
     url = f"{SUPABASE_URL}/rest/v1/saved_books?id=eq.{book_id}"
-    headers = get_supabase_headers(return_reresentation=True)
+    headers = get_supabase_headers(return_representation=True)
     
     response= requests.patch(url,headers=headers,json={"status":book_update.status})
     
