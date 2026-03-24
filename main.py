@@ -34,7 +34,7 @@ class TagCreate(BaseModel):
 class BookSave(BaseModel):
     title:str=Field(...,min_length=1)
     authors:str | None=None
-    thumbnails:str | None=None
+    thumbnail_url:str | None=None
     tag_id:int | None=None
 
 class BookUpdate(BaseModel):
