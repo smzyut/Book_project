@@ -1,5 +1,6 @@
 import os
 import random
+import httpx
 import requests
 from fastapi import FastAPI,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,7 @@ app = FastAPI(title="Book Discovery  API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins = ["*"],
+    allow_origins = ["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,13 +42,14 @@ class BookUpdate(BaseModel):
     status:str=Field(...,pattern="^(want_to_read|reading|finished)$")
     
 @app.post("/tags/",status_code=201)
-def create_tag(tag:TagCreate):
+async def create_tag(tag:TagCreate):
     # data=supabase.table("tags").insert(tag.model.dump()).execute()
     # return data.data[0]
     url = f"{SUPABASE_URL}/rest/v1/tags"
     headers = get_supabase_headers(return_representation=True)
     
-    response = requests.post(url,headers=headers,json=tag.model_dump())
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url,headers=headers,json=tag.model_dump())
     
     if response.status_code not in (200,201):
         raise HTTPException(status_code=400,detail=f"タグの登録に失敗しました:{response.text}")
@@ -55,21 +57,31 @@ def create_tag(tag:TagCreate):
     return response.json()[0]
 
 @app.get("/discover/")
-def discover_books():
+async def discover_books(tag_id:int |None=None):
     # tags_data = supabase.table("tags").select("*").execute()
-    url = f"{SUPABASE_URL}/rest/v1/tags?select=*"
     headers=get_supabase_headers()
     
-    tags_response = requests.get(url,headers=headers)
-    if tags_response.status_code != 200 or not tags_response.json():
-        raise HTTPException(status_code=404,detail="まずは/tags/から興味のあるキーワードを登録してください")
-    tags_data = tags_response.json()
+    async with httpx.AsyncClient() as client:
+        
+        if tag_id is not None:
+            url = f"{SUPABASE_URL}/rest/v1/tags?id=eq.{tag_id}&select=*"
+            tags_response = await client.get(url,headers=headers)
+            if tags_response.status_code != 200 or not tags_response.json():
+                raise HTTPException(status_code=404,detail="指定されたタグが見つかりません")
+            selected_tag = tags_response.json()[0]
+        
+        else:
+            url = f"{SUPABASE_URL}/rest/v1/tags?select=*"
+            tags_response = await client.get(url,headers=headers)
+            
+            if tags_response.status_code != 200 or not tags_response.json():
+                raise HTTPException(status_code=404,detail="まずは/tags/から興味のあるキーワードを登録してください")
+            tags_data = tags_response.json()
+            selected_tag = random.choice(tags_data)
     
-    selected_tag = random.choice(tags_data)
-    keyword = selected_tag["name"]
-    
-    google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={keyword}&maxResults=3&orderBy=newest"
-    response = requests.get(google_books_url)
+        keyword = selected_tag["name"]
+        google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={keyword}&maxResults=3&orderBy=newest"
+        response = await client.get(google_books_url)
     
     if response.status_code != 200:
         raise HTTPException(status_code=500,detail="本の検索に失敗しました")
@@ -84,20 +96,21 @@ def discover_books():
             "tag_id":selected_tag["id"],
             "title":info.get("title","タイトル不明"),
             "authors":",".join(info.get("authors",["著者不明"])),
-            "descriptions":info.get("descriptions","説明なし")[:100] + "...",
+            "description":info.get("description","説明なし")[:100] + "...",
             "thumbnail_url":info.get("imageLinks",{}).get("thumbnail")
         })
     
     return {"message":f"「{keyword}」に関するおすすめの本です！","books":recommendations}
 
 @app.post("/books/",status_code=201)
-def save_book(book:BookSave):
+async def save_book(book:BookSave):
     # data = supabase.table("saved_books").insert(book.model_dump()).execute()
     # return data.data[0]
     url = f"{SUPABASE_URL}/rest/v1/saved_books"
     headers = get_supabase_headers(return_representation=True)
     
-    response = requests.post(url,headers=headers,json=book.model_dump())
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url,headers=headers,json=book.model_dump())
     
     if response.status_code not in (200,201):
         raise HTTPException(status_code=400,detail=f"保存に失敗しました:{response.text}")
@@ -105,14 +118,66 @@ def save_book(book:BookSave):
     return response.json()[0]
 
 @app.patch("/books/{book_id}")
-def update_book_status(book_id:int,book_update:BookUpdate):
+async def update_book_status(book_id:int,book_update:BookUpdate):
     # data = supabase.table("saved_books").update({"status":book_update.status}).eq("id",book_id).execute()
     url = f"{SUPABASE_URL}/rest/v1/saved_books?id=eq.{book_id}"
     headers = get_supabase_headers(return_representation=True)
     
-    response= requests.patch(url,headers=headers,json={"status":book_update.status})
+    async with httpx.AsyncClient() as client:
+        response= await client.patch(url,headers=headers,json={"status":book_update.status})
     
     if response.status_code != 200 or not response.json():
         raise HTTPException(status_code=404,detail='指定された本が見つからないか、更新に失敗しました')
     
     return response.json()[0]
+
+@app.delete("/tags/{tag_id}")
+async def delete_tag(tag_id: int):
+    url = f"{SUPABASE_URL}/rest/v1/tags?id=eq.{tag_id}"
+    headers = get_supabase_headers()
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(url,headers=headers)
+    
+    if response.status_code not in (200,204):
+        raise HTTPException(status_code=400,detail=f"タグの削除に失敗しました:{response.text}")
+    
+    return {"message":"タグを削除しました"}
+
+@app.delete("/books/{book_id}")
+async def delete_book(book_id:int):
+    url = f"{SUPABASE_URL}/rest/v1/saved_books?id=eq.{book_id}"
+    headers = get_supabase_headers()
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(url,headers=headers)
+    
+    if response.status_code not in (200,204):
+        raise HTTPException(status_code=400,detail=f"ほんの削除に失敗しました:{response.text}")
+    
+    return {"message":"保存した本を削除しました"}
+
+@app.get("/search")
+async def search_books(keyword:str):
+    google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={keyword}&maxResults=10&orderBy=relevance"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(google_books_url)
+    
+    if response.status_code != 200:
+        raise HTTPException(status_code=500,detail="本の検索に失敗しました")
+    
+    books = response.json().get("items",[])
+    
+    results = []
+    
+    for book in books:
+        info = book.get("volumeInfo",{})
+        results.append({
+            "title":info.get("title","タイトル不明"),
+            "authors":",".join(info.get("authors",["著者不明"])),
+            "description":info.get("description","説明なし")[:100] + "...",
+            "thumbnail_url":info.get("imageLinks",{}).get("thumbnail")
+        })
+    
+    return {"keyword":keyword,"books":results}
